@@ -1,2 +1,2 @@
-# project_repo_ASP
+# Coding project
 Project repository for python course
