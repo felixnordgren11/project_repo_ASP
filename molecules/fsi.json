@@ -1,0 +1,9 @@
+{
+    "n_atoms": 9,
+    "atom_types": [
+        "FSI",
+        "SBT",
+        "NBT",
+        "OBT"
+    ]
+}

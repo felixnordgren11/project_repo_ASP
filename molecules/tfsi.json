@@ -1,0 +1,10 @@
+{
+    "n_atoms": 15,
+    "atom_types": [
+        "CBT",
+        "F1",
+        "SBT",
+        "NBT",
+        "OBT"
+    ]
+}
