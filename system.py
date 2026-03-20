@@ -221,7 +221,8 @@ class System:
         - ("TFSI", "OBT") -> "resname TFSI and name OBT" (Only OBT inside TFSI)
         - "type 1 or type 2" -> Custom MDA strings returned as-is
         """
-        # 1. Handle explicit tuples (Molecule, AtomType)
+        # Handle tuples to select specific atom types from a specific molecule
+        # e.g. if putting in ("TFSI", "OBT") -> gets converted to "resname TFSI and name OBT" (Only OBT inside TFSI)
         if isinstance(sel, tuple) or isinstance(sel, list):
             if len(sel) == 2:
                 mol_name, atom_name = sel
@@ -229,21 +230,21 @@ class System:
             else:
                 raise ValueError("Tuple selections must be formatted as (molecule_name, atom_name)")
 
-        # 2. Handle string inputs
+        # allow string inputs
         if isinstance(sel, str):
-            # Check if user passed a raw MDAnalysis string manually
-            if any(keyword in sel.lower() for keyword in [' or ', ' and ', 'type ', 'name ', 'resname ']):
+            # Check MDA selection string was passed
+            if any(keyword in sel.lower() for keyword in [' or ', ' and ', 'type ', 'name ', 'resname ', 'all', 'not ']):
                 return sel
                 
             # Check if it matches a whole molecule (e.g., "TFSI", "PF6", "Li")
             if hasattr(self, 'molecule_residues') and sel in self.molecule_residues:
                 return f"resname {sel}"
             
-            # Check if it matches an atom type string (e.g., "OBT", "F1")
+            # Check if it matches an atom type string (e.g., "OBT", "F1") which are loaded in from the json files
             if sel in self.atom_types:
                 return f"name {sel}"
                 
-            # Fallback legacy behavior
+            # o/w just use the types
             if sel in self.atom_types:
                 return f"type {self.atom_types[sel]}"
 
@@ -253,7 +254,7 @@ class System:
         """
         Calculates the Radial Distribution Function (RDF) between two selections.
         """
-        # Convert user input (e.g., 'Li') to MDA selection strings (e.g., 'type 1')
+        # Convert input (e.g., 'Li') to MDA selection strings (e.g., 'type 1')
         mda_sel1 = self._build_selection_string(sel1)
         mda_sel2 = self._build_selection_string(sel2)
         
@@ -268,32 +269,66 @@ class System:
         rdf_analyzer = rdf.InterRDF(ag1, ag2, nbins=nbins, range=r_range)
         rdf_analyzer.run(step=step)
         
-        # Returns x (distance in Angstroms) and y (g(r))
+        # Returns r (distance in Ångström) and g(r) (radial probability density)
         return rdf_analyzer.results.bins, rdf_analyzer.results.rdf
 
-    def get_msd(self, sel, fft=True, step=1):
-        """
-        Calculates the Mean Squared Displacement (MSD) for a selection.
-        Uses FFT for performance improvements on large trajectories.
-        """
-        mda_sel = self._build_selection_string(sel)
-        ag = self.universe.select_atoms(mda_sel)
-        
-        if len(ag) == 0:
-            raise ValueError(f"Empty selection, check selection string: {sel}")
+    def get_msd(self, sel, fft=True, step=1, com=False):
+            """
+            Calculates the Mean Squared Displacement (MSD) for a selection of atoms or molecules.
 
-        print(f"Calculating MSD for {mda_sel} ({len(ag)} atoms)...")
-        
-        msd_analyzer = msd.EinsteinMSD(ag, fft=fft)
-        msd_analyzer.run(step=step)
-        
-        # Calculate time array in picoseconds (assuming self.dt is in seconds)
-        # dt (e.g., 1e-15 s) * dump_interval (e.g., 1000) * 1e12 = time per frame in ps
-        time_per_frame_ps = self.dt * self.dump_interval * 1e12
-        frames = len(msd_analyzer.results.timeseries)
-        time_array = np.arange(frames) * time_per_frame_ps
-        
-        # Returns x (time in ps) and y (MSD in Angstroms^2)
-        return time_array, msd_analyzer.results.timeseries
+            Parameters:
+            - sel: Selection string, tuple, or molecule name.
+            - fft: Boolean, whether to use FFT to speed up MSD calculations.
+            - step: Integer, step size for frames to process.
+            - com: Boolean. If True, computes the MSD of the Center of Mass of the selected molecules/residues.
+                   If False, computes the standard combined/averaged atom MSD.
+            """
+            mda_sel = self._build_selection_string(sel)
+            ag = self.universe.select_atoms(mda_sel)
+
+            if len(ag) == 0:
+                raise ValueError(f"Empty selection, check selection string: {sel}")
+            
+            # ocmpute MSD for center of mass of molecules if com is True
+            if com:
+                residues = ag.residues
+
+                # only load every step:th frame in case it is not 1
+                traj_slice = self.universe.trajectory[::step]
+                n_frames = len(traj_slice)
+
+                print(f"Calculating COM MSD for {mda_sel} ({len(residues)} molecules) over {n_frames} frames...")
+
+                com_traj = np.zeros((n_frames, len(residues), 3), dtype=np.float32)
+                current_frame = self.universe.trajectory.frame
+
+                # calculate center of mass for each residue
+                for i, ts in enumerate(traj_slice):
+                    com_traj[i] = residues.center_of_mass(compound='residues')
+
+                self.universe.trajectory[current_frame]
+
+                dummy_u = mda.Universe.empty(len(residues), trajectory=True)
+                dummy_u.load_new(com_traj, format="memory")
+
+                msd_analyzer = msd.EinsteinMSD(dummy_u.atoms, fft=fft)
+                # already sliced the trajectory so step is 1
+                msd_analyzer.run(step=1)
+
+            else:
+                
+                # standard atom-averaged MSD
+                print(f"Calculating Atom-averaged MSD for {mda_sel} ({len(ag)} atoms)...")
+                msd_analyzer = msd.EinsteinMSD(ag, fft=fft)
+                msd_analyzer.run(step=step)
+
+            # time array in ns
+            time_per_frame_ns = self.dt * self.dump_interval * step * 1e9 
+
+            frames = len(msd_analyzer.results.timeseries)
+            time_array = np.arange(frames) * time_per_frame_ns
+
+            # Returns t in ns and y MSD in Ångström^2
+            return time_array, msd_analyzer.results.timeseries
         
 
