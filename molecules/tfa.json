@@ -1,0 +1,9 @@
+{
+    "n_atoms": 7,
+    "atom_types": [
+        "CFA",
+        "FFA",
+        "CO2",
+        "O2F"
+    ]
+}
