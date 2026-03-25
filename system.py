@@ -7,6 +7,9 @@ from MDAnalysis.analysis import msd, rdf
 from .molecules import load_molecule_definitions
 
 class System:
+    '''
+    A class to store information about a LAMMPS simulation system.
+    '''
     def __init__(self, sysdir, system_name=None, cations=None, anions=None, n_molecules=None, 
                  ff_file_name="data.lmp", 
                  data_file_name="system_after_equilibration.data", 
@@ -29,8 +32,8 @@ class System:
         # Extracted parameters
         self.atom_types = {}
         self.box_size = None
-        self.dt = 1.0e-15      # default 1 fs fallback
-        self.dump_interval = 1000 # default fallback
+        self.dt = 1.0e-15      # default fallback (1 fs)
+        self.dump_interval = 1000 # (usually use this value for production trajectories)
         self.temperature = None
         
         # Run parsing methods
@@ -46,7 +49,7 @@ class System:
             format="LAMMPSDUMP"
         )
         
-        # Assign resnames using JSON definitions
+        # assign resnames using JSON definitions
         self._assign_molecule_names()
 
     def _parse_atom_types(self):
