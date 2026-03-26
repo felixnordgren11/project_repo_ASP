@@ -1,0 +1,7 @@
+README.md
+pyproject.toml
+AutoMD.egg-info/PKG-INFO
+AutoMD.egg-info/SOURCES.txt
+AutoMD.egg-info/dependency_links.txt
+AutoMD.egg-info/requires.txt
+AutoMD.egg-info/top_level.txt
