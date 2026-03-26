@@ -1,5 +1,8 @@
 README.md
 pyproject.toml
+AutoMD/__init__.py
+AutoMD/molecules.py
+AutoMD/system.py
 AutoMD.egg-info/PKG-INFO
 AutoMD.egg-info/SOURCES.txt
 AutoMD.egg-info/dependency_links.txt

@@ -17,7 +17,7 @@ def load_molecule_definitions(molecules_dir):
                 with open(filepath, 'r') as f:
                     data = json.load(f)
                     # Use filename without extension as the molecule name (uppercase)
-                    mol_name = filename[:-5].upper()
+                    mol_name = data["name"]
                     molecules[mol_name] = data
             except Exception as e:
                 print(f"Error loading {filename}: {e}")

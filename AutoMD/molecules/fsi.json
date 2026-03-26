@@ -1,8 +1,8 @@
 {
-    "n_atoms": 15,
+    "name": "FSI",
+    "n_atoms": 9,
     "atom_types": [
-        "CBT",
-        "F1",
+        "FSI",
         "SBT",
         "NBT",
         "OBT"

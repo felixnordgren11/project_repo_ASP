@@ -7,7 +7,7 @@ name = "AutoMD"
 version = "0.1.0"
 description = "Automated LAMMPS trajectory parsing and analysis for molten salts"
 authors = [
-    {name = "Felix", email = "[EMAIL_ADDRESS]"}
+    {name = "Felix Nordgren", email = "felix.nordgren@kemi.uu.se"}
 ]
 readme = "README.md"
 requires-python = ">=3.8"
