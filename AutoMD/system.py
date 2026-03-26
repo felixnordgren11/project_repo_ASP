@@ -7,8 +7,11 @@ from MDAnalysis.analysis import msd, rdf
 from .molecules import load_molecule_definitions
 from scipy.integrate import cumulative_trapezoid
 from scipy.stats import linregress
+from .analysis.msd import ComputeMSD
+from .analysis.rdf import ComputeRDF
+from .analysis.conductivity import ComputeHelfand
 
-class System:
+class System(ComputeMSD, ComputeRDF, ComputeHelfand):
     '''
     A class to store information about a LAMMPS simulation system
     '''
@@ -263,137 +266,3 @@ class System:
                 return f"type {self.atom_types[sel]}"
 
         raise ValueError(f"Unrecognized selection format: {sel}")
-
-    def get_rdf(self, sel1, sel2, nbins=200, r_range=(0.0, 15.0), step=1):
-        """
-        Calculates the Radial Distribution Function (RDF) between two selections.
-        """
-        # convert input (e.g., 'Li') to MDA selection strings (e.g., 'type 1')
-        mda_sel1 = self._build_selection_string(sel1)
-        mda_sel2 = self._build_selection_string(sel2)
-        
-        ag1 = self.universe.select_atoms(mda_sel1)
-        ag2 = self.universe.select_atoms(mda_sel2)
-        
-        if len(ag1) == 0 or len(ag2) == 0:
-            raise ValueError(f"Empty selection! Check your selection strings: {sel1}, {sel2}")
-
-        print(f"Calculating RDF between {mda_sel1} ({len(ag1)} atoms) and {mda_sel2} ({len(ag2)} atoms)...")
-        
-        rdf_analyzer = rdf.InterRDF(ag1, ag2, nbins=nbins, range=r_range)
-        rdf_analyzer.run(step=step)
-        
-        # Returns r (distance in Ångström) and g(r) (radial probability density)
-        return rdf_analyzer.results.bins, rdf_analyzer.results.rdf
-
-    def get_msd(self, sel, fft=True, step=1, com=False):
-            """
-            Calculates the Mean Squared Displacement (MSD) for a selection of atoms or molecules.
-
-            Parameters:
-            - sel: Selection string, tuple, or molecule name.
-            - fft: Boolean, whether to use FFT to speed up MSD calculations.
-            - step: Integer, step size for frames to process.
-            - com: Boolean. If True, computes the MSD of the Center of Mass of the selected molecules/residues.
-                   If False, computes the standard combined/averaged atom MSD.
-            """
-            mda_sel = self._build_selection_string(sel)
-            ag = self.universe.select_atoms(mda_sel)
-
-            if len(ag) == 0:
-                raise ValueError(f"Empty selection, check selection string: {sel}")
-            
-            # compute MSD for center of mass of molecules if com is True
-            if com:
-                residues = ag.residues
-
-                # only load every step:th frame in case it is not 1
-                traj_slice = self.universe.trajectory[::step]
-                n_frames = len(traj_slice)
-
-                print(f"Calculating COM MSD for {mda_sel} ({len(residues)} molecules) over {n_frames} frames...")
-
-                com_traj = np.zeros((n_frames, len(residues), 3), dtype=np.float32)
-                current_frame = self.universe.trajectory.frame
-
-                # calculate center of mass for each residue
-                for i, ts in enumerate(traj_slice):
-                    com_traj[i] = residues.center_of_mass(compound='residues')
-
-                self.universe.trajectory[current_frame]
-
-                dummy_u = mda.Universe.empty(len(residues), trajectory=True)
-                dummy_u.load_new(com_traj, format="memory")
-
-                msd_analyzer = msd.EinsteinMSD(dummy_u.atoms, fft=fft)
-                # already sliced the trajectory so step is 1
-                msd_analyzer.run(step=1)
-
-            else:
-                
-                # standard atom-averaged MSD
-                print(f"Calculating Atom-averaged MSD for {mda_sel} ({len(ag)} atoms)...")
-                msd_analyzer = msd.EinsteinMSD(ag, fft=fft)
-                msd_analyzer.run(step=step)
-
-            # time array in ns
-            time_per_frame_ns = self.dt * self.dump_interval * step * 1e9 
-
-            frames = len(msd_analyzer.results.timeseries)
-            time_array = np.arange(frames) * time_per_frame_ns
-
-            # Returns t in ns and y MSD in Ångström^2
-            return time_array, msd_analyzer.results.timeseries
-
-
-
-    def get_gk_conductivity(self, step = 1):
-        """
-        Compute ionic conductivity via Einstein-Helfand relation (equivalent to GK).
-
-        Returns:
-            time_ns, msd, conductivity_S_per_m
-        """
-
-        KB = 1.380649e-23
-        E_CHARGE = 1.60217663e-19
-        ANGSTROM_TO_M = 1e-10
-
-        u = self.universe
-        ag = u.atoms
-
-        if ag.charges is None:
-            raise ValueError("Missing charges")
-
-        time_per_frame_ns = self.dt * self.dump_interval * step * 1e9
-        traj = u.trajectory[::step]
-        n_frames = len(traj)
-
-        M = np.zeros((n_frames, 3), dtype=np.float64)
-
-        for i, ts in enumerate(traj):
-            M[i] = np.sum(ag.charges[:, None] * ag.positions, axis=0)
-
-
-        M *= (E_CHARGE * ANGSTROM_TO_M)
-
-        dummy = mda.Universe.empty(n_atoms=1, trajectory=True)
-        dummy.load_new(M[:, None, :], format="memory")
-
-        msd_calc = msd.EinsteinMSD(dummy.atoms, fft=True)
-        msd_calc.run()
-
-        msd_vals = msd_calc.results.timeseries
-        time = np.arange(len(msd_vals)) * time_per_frame_ns
-        time_s = time * 1e-9
-
-        lx, ly, lz = u.dimensions[:3]
-        vol_m3 = lx * ly * lz * (ANGSTROM_TO_M**3)
-        start = len(time_s) // 3
-        end = len(time_s) * 3 // 4
-
-        slope, _, _, _, _ = linregress(time_s[start:end], msd_vals[start:end])
-
-        sigma = slope / (6 * KB * self.temperature * vol_m3)
-
-        return time, msd_vals, sigma

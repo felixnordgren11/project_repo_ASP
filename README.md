@@ -19,4 +19,11 @@ AutoMD parses atom types from data files created using fftool and assigns them t
 
 ## Installation
 
+clone the repo then if inside the repo, run:
+
+pip install -e .
+
+Otherwise if outside in parent directory, run:
+
+pip install AutomMD
 
