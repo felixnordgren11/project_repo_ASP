@@ -1,4 +1,11 @@
 import MDAnalysis.analysis.msd as msd
+import numpy as np
+from scipy.stats import linregress
+import MDAnalysis as mda
+
+KB = 1.380649e-23        # J/K
+E_CHARGE = 1.60217663e-19 # C
+ANGSTROM_TO_M = 1e-10
 
 class ComputeMSD:
     """
@@ -49,3 +56,49 @@ class ComputeMSD:
         time_array = np.arange(frames) * time_per_frame_ns
         # Returns t in ns and y MSD in Ångström^2
         return time_array, msd_analyzer.results.timeseries
+
+    def get_nernst_einstein_conductivity(self, fft=True, step=1, fit_window=None):
+        """
+        Calculates the Nernst-Einstein diffusion coefficient for a system.
+
+        Returns
+        -------
+        float
+            Nernst einstein conductivity in mS/cm
+        dict
+            Dictionary containing the diffusion coefficients for each species.
+            Specific species called with e.g. e.g. D["Li"]
+        """
+        residue_names = np.unique(self.universe.residues.resnames)
+        total_ne_sum = 0.0
+        D = {}
+        for i, resname in enumerate(residue_names):
+            if resname == "UNK": continue
+            print(f"  -> Analyzing {resname}...")
+            time, msd = self.get_msd(resname, com=True, step=step, fft=fft)
+
+            if fit_window is None:
+                fit_window = (1.0, time[-1])
+                mask = (time >= fit_window[0]) & (time <= fit_window[1])
+            else:
+                mask = (time >= 1.0) & (time <= 5.0)
+            
+            t_sec = time[mask] * 1e-9
+            msd_m2 = msd[mask] * (ANGSTROM_TO_M**2)
+            
+            slope, _, _, _, _ = linregress(t_sec, msd_m2)
+            D[resname] = slope / 6.0
+            ag = self.universe.select_atoms(f"resname {resname}")
+            n_particles = ag.n_residues
+            z = np.round(ag.residues[0].atoms.charges.sum())
+            total_ne_sum += n_particles * (z**2) * D[resname]
+
+        volume_m3 = (self.box_size * ANGSTROM_TO_M)**3
+        prefactor = (E_CHARGE**2) / (KB * self.temperature * volume_m3)
+        ne_conductivity = prefactor * total_ne_sum * 10
+        return ne_conductivity, D
+            
+            
+            
+            
+        
