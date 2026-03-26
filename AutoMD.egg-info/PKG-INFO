@@ -2,6 +2,7 @@ Metadata-Version: 2.4
 Name: AutoMD
 Version: 0.1.0
 Summary: Automated LAMMPS trajectory parsing and analysis for molten salts
+Author-email: Felix Nordgren <felix.nordgren@kemi.uu.se>
 Requires-Python: >=3.8
 Description-Content-Type: text/markdown
 Requires-Dist: numpy
