@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "AutoMD"
+version = "0.1.0"
+description = "Automated LAMMPS trajectory parsing and analysis for molten salts"
+authors = [
+    {name = "Felix", email = "[EMAIL_ADDRESS]"}
+]
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "numpy",
+    "pandas",
+    "scipy",
+    "matplotlib",
+    "seaborn",
+    "MDAnalysis>=2.0.0"
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["AutoMD*"]

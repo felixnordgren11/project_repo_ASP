@@ -5,15 +5,18 @@ import MDAnalysis as mda
 import pandas as pd
 from MDAnalysis.analysis import msd, rdf
 from .molecules import load_molecule_definitions
+from scipy.integrate import cumulative_trapezoid
+from scipy.stats import linregress
 
 class System:
     '''
-    A class to store information about a LAMMPS simulation system.
+    A class to store information about a LAMMPS simulation system
     '''
     def __init__(self, sysdir, system_name=None, cations=None, anions=None, n_molecules=None, 
                  ff_file_name="data.lmp", 
                  data_file_name="system_after_equilibration.data", 
                  dump_file_name="dump_prod.lammpstrj",
+                 green_kubo_file_name=None,
                  input_file_name="in_append_tmp.lmp",
                  temperature=None):
         
@@ -23,25 +26,26 @@ class System:
         self.anions = [anions] if isinstance(anions, str) else (anions if anions is not None else [])
         self.n_molecules = n_molecules
         
-        # File paths
+        # file paths
         self.ff_file = os.path.join(sysdir, ff_file_name)
         self.data_file = os.path.join(sysdir, data_file_name)
         self.dump_file = os.path.join(sysdir, dump_file_name)
         self.input_file = os.path.join(sysdir, input_file_name)
+        self.green_kubo_file = os.path.join(sysdir, green_kubo_file_name) if green_kubo_file_name is not None else None
         
-        # Extracted parameters
+        # parameters
         self.atom_types = {}
         self.box_size = None
         self.dt = 1.0e-15      # default fallback (1 fs)
         self.dump_interval = 1000 # (usually use this value for production trajectories)
         self.temperature = None
         
-        # Run parsing methods
+        # parse stuff
         self._parse_atom_types()
         self._parse_box_size()
         self._parse_input_script()
         
-        # Initialize MDAnalysis Universe
+        # initialize universe
         self.universe = mda.Universe(
             self.data_file,
             self.dump_file,
@@ -71,11 +75,11 @@ class System:
                 continue
                 
             if in_masses_section:
-                # Stop parsing if we hit the next section
+                # stop when reaching end of atom types
                 if line.startswith("Bond Coeffs") or line.startswith("Pair Coeffs"):
                     break
                 
-                # Look for lines formatted like "1 6.941 # Li"
+                # looks for lines formatted by fftool "1 6.941 # Li"
                 if '#' in line:
                     data_part, comment_part = line.split('#', 1)
                     columns = data_part.split()
@@ -85,12 +89,14 @@ class System:
                         atom_name = comment_part.strip()
                         self.atom_types[atom_name] = type_number
                         
-                        # Auto-detect cation if it's Li or K
-                        if atom_name in ['Li', 'K'] and atom_name not in self.cations:
+                        # detect cation
+                        if atom_name in ['Li', 'K', 'Na', 'Rb', 'Cs'] and atom_name not in self.cations:
                             self.cations.append(atom_name)
 
     def _parse_box_size(self):
-        """Extracts box dimensions from the equilibrated data file."""
+        """
+        Extracts box dimensions from the equilibrated data file
+        """
         if not os.path.exists(self.data_file):
             return
             
@@ -99,12 +105,13 @@ class System:
                 if "xlo xhi" in line:
                     parts = line.split()
                     xlo, xhi = float(parts[0]), float(parts[1])
-                    # Assuming a cubic box as per your initial script
                     self.box_size = xhi - xlo 
                     break
 
     def _parse_input_script(self):
-        """Extracts temperature, timestep, and dump interval from the LAMMPS input script."""
+        """
+        Extracts temperature, timestep, and dump interval from the LAMMPS input script.
+        """
         if not os.path.exists(self.input_file):
             return
             
@@ -113,12 +120,10 @@ class System:
         with open(self.input_file, 'r') as f:
             for line in f:
                 line = line.strip()
-                
-                # Extract Production Temperature
                 if line.startswith("variable T_prod equal"):
-                    self.temperature = float(line.split()[3])
+                    self.temperature = float(line.split()[3]) # get production temperature
                 
-                # Extract Timestep (converting fs to seconds)
+                # (convert fs to s)
                 elif line.startswith("timestep"):
                     try:
                         ts_fs = float(line.split()[1])
@@ -126,11 +131,9 @@ class System:
                     except ValueError:
                         pass
                 
-                # Extract Dump Interval dynamically
                 elif line.startswith("dump ") and target_dump_file in line:
                     parts = line.split()
                     try:
-                        # Find where the filename is, the interval is the item right before it
                         file_index = parts.index(target_dump_file)
                         self.dump_interval = int(parts[file_index - 1])
                         print(f"Dump interval: {self.dump_interval}")
@@ -138,7 +141,12 @@ class System:
                         pass
 
     def to_dict(self):
-        """Helper to convert the system object into a dictionary for Pandas."""
+        """
+        Helper to convert the system object into a dictionary for Pandas.
+
+        Returns:
+            dict: Dictionary containing system information.
+        """
         return {
             "system_name": self.system_name,
             "sysdir": self.sysdir,
@@ -157,7 +165,9 @@ class System:
         """
         Assigns standard names string to MDAnalysis residues based on atom count
         and presence of specific atom types defined in AutoMD/molecules/*.json.
+
         """
+
         molecules_dir = os.path.join(os.path.dirname(__file__), 'molecules')
         molecule_defs = load_molecule_definitions(molecules_dir)
         
@@ -167,7 +177,7 @@ class System:
         inv_atom_types = {str(v): k for k, v in self.atom_types.items()}
         assigned_counts = {}
         
-        # Populate atom names so MDAnalysis selections like "name O*" work
+        # add atom names so selections like "name O*" work
         names_array = np.array([inv_atom_types.get(nt, nt) for nt in self.universe.atoms.types], dtype=object)
         try:
             self.universe.add_TopologyAttr('name', names_array)
@@ -177,7 +187,7 @@ class System:
         resnames_array = np.array(["UNK"] * len(self.universe.residues), dtype=object)
         self.molecule_residues = {}
         
-        for i, res in enumerate(self.universe.residues):
+        for i, res in enumerate(self.universe.residues): # loop through all residues to assign them names
             n_atoms = res.atoms.n_atoms
             numeric_types = np.unique(res.atoms.types)
             string_types = set([inv_atom_types.get(nt, nt) for nt in numeric_types])
@@ -185,8 +195,10 @@ class System:
             assigned_name = None
             
             for mol_name, sig in molecule_defs.items():
-                if n_atoms == sig.get('n_atoms'):
-                    target_types = set([str(t) for t in sig.get('atom_types', [])])
+                if n_atoms == sig.get('n_atoms'): # residue size
+                    # important! Here we differentiate between different atom types 
+                    # in case there are multiple molecules with the same size
+                    target_types = set([str(t) for t in sig.get('atom_types', [])]) 
                     if string_types.issubset(target_types):
                         assigned_name = mol_name
                         break
@@ -213,11 +225,11 @@ class System:
             for i, res in enumerate(self.universe.residues):
                 res.resname = resnames_array[i]
                 
-        print(f"Assigned MDAnalysis residues: {assigned_counts}")
+        print(f"Assigned residues: {assigned_counts}")
 
     def _build_selection_string(self, sel):
         """
-        Helper method to build MDAnalysis selection strings dynamically.
+        Helper method to build selection strings dynamically.
         Supports:
         - "TFSI" -> "resname TFSI" (Whole molecule)
         - "OBT" -> "name OBT" (All OBT atoms everywhere)
@@ -235,15 +247,14 @@ class System:
 
         # allow string inputs
         if isinstance(sel, str):
-            # Check MDA selection string was passed
+            # allow for MDAnalysis selection strings
             if any(keyword in sel.lower() for keyword in [' or ', ' and ', 'type ', 'name ', 'resname ', 'all', 'not ']):
                 return sel
-                
-            # Check if it matches a whole molecule (e.g., "TFSI", "PF6", "Li")
+            # allow for whole molecule selections
             if hasattr(self, 'molecule_residues') and sel in self.molecule_residues:
                 return f"resname {sel}"
             
-            # Check if it matches an atom type string (e.g., "OBT", "F1") which are loaded in from the json files
+            # if it matches an atom type string (e.g., "OBT", "F1") which are loaded in from the json files
             if sel in self.atom_types:
                 return f"name {sel}"
                 
@@ -257,7 +268,7 @@ class System:
         """
         Calculates the Radial Distribution Function (RDF) between two selections.
         """
-        # Convert input (e.g., 'Li') to MDA selection strings (e.g., 'type 1')
+        # convert input (e.g., 'Li') to MDA selection strings (e.g., 'type 1')
         mda_sel1 = self._build_selection_string(sel1)
         mda_sel2 = self._build_selection_string(sel2)
         
@@ -292,7 +303,7 @@ class System:
             if len(ag) == 0:
                 raise ValueError(f"Empty selection, check selection string: {sel}")
             
-            # ocmpute MSD for center of mass of molecules if com is True
+            # compute MSD for center of mass of molecules if com is True
             if com:
                 residues = ag.residues
 
@@ -333,5 +344,56 @@ class System:
 
             # Returns t in ns and y MSD in Ångström^2
             return time_array, msd_analyzer.results.timeseries
-        
 
+
+
+    def get_gk_conductivity(self, step = 1):
+        """
+        Compute ionic conductivity via Einstein-Helfand relation (equivalent to GK).
+
+        Returns:
+            time_ns, msd, conductivity_S_per_m
+        """
+
+        KB = 1.380649e-23
+        E_CHARGE = 1.60217663e-19
+        ANGSTROM_TO_M = 1e-10
+
+        u = self.universe
+        ag = u.atoms
+
+        if ag.charges is None:
+            raise ValueError("Missing charges")
+
+        time_per_frame_ns = self.dt * self.dump_interval * step * 1e9
+        traj = u.trajectory[::step]
+        n_frames = len(traj)
+
+        M = np.zeros((n_frames, 3), dtype=np.float64)
+
+        for i, ts in enumerate(traj):
+            M[i] = np.sum(ag.charges[:, None] * ag.positions, axis=0)
+
+
+        M *= (E_CHARGE * ANGSTROM_TO_M)
+
+        dummy = mda.Universe.empty(n_atoms=1, trajectory=True)
+        dummy.load_new(M[:, None, :], format="memory")
+
+        msd_calc = msd.EinsteinMSD(dummy.atoms, fft=True)
+        msd_calc.run()
+
+        msd_vals = msd_calc.results.timeseries
+        time = np.arange(len(msd_vals)) * time_per_frame_ns
+        time_s = time * 1e-9
+
+        lx, ly, lz = u.dimensions[:3]
+        vol_m3 = lx * ly * lz * (ANGSTROM_TO_M**3)
+        start = len(time_s) // 3
+        end = len(time_s) * 3 // 4
+
+        slope, _, _, _, _ = linregress(time_s[start:end], msd_vals[start:end])
+
+        sigma = slope / (6 * KB * self.temperature * vol_m3)
+
+        return time, msd_vals, sigma

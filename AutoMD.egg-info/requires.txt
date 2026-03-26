@@ -4,5 +4,3 @@ scipy
 matplotlib
 seaborn
 MDAnalysis>=2.0.0
-
-
