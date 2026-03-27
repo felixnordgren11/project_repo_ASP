@@ -1,6 +1,7 @@
 from MDAnalysis.analysis import rdf
-from scipy.integrate import simpson
+from scipy.integrate import simpson, cumulative_trapezoid
 import numpy as np
+from scipy.signal import find_peaks
 
 
 
@@ -10,7 +11,7 @@ class ComputeRDF:
     Class for calculating Radial Distribution Functions (RDFs).
     """
 
-    def get_rdf(self, sel1, sel2, nbins=200, r_range=(0.0, 15.0), step=1, kirkwood_buff=False):
+    def get_rdf(self, sel1, sel2, nbins=200, r_range=(0.0, 15.0), step=1, kirkwood_buff=False, coordination_number=False):
         """
         Calculates the Radial Distribution Function (RDF) between two selections.
 
@@ -55,11 +56,16 @@ class ComputeRDF:
         }
 
         if coordination_number:
-            cn = 4 * np.pi * rho * simpson(y=(g_r * (bins**2)), x=bins, initial=0)
-            first_peak_idx = np.argmax(g_r)
-            minima, _ = find_peaks(-g_r[first_peak_idx:])
+            rho = len(ag2) / self.universe.dimensions[0]**3
+            cn = 4 * np.pi * rho * cumulative_trapezoid(y=(g_r * (bins**2)), x=bins, initial=0)
+            peaks, _ = find_peaks(g_r, height=1.2)
+            if len(peaks) > 0:
+                first_peak_idx = peaks[0]
+                minima, _ = find_peaks(-g_r[first_peak_idx:])
+            else:
+                minima, _ = find_peaks(-g_r)
             first_min_idx = first_peak_idx + minima[0]
-            shell_radius = r[first_min_idx]
+            shell_radius = bins[first_min_idx]
             shell_cn = cn[first_min_idx]
             results["coordination_number"] = shell_cn
             results["first_shell_radius"] = shell_radius
